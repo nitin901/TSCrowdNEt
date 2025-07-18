@@ -1,0 +1,249 @@
+# ==============================================================================
+# Crowd Counting Model Comparison
+#
+# This script trains and evaluates five different deep learning architectures
+# for the task of crowd counting on the Mall dataset.
+#
+# Models Compared:
+# 1. ResNet50 (from Keras Applications)
+# 2. VGG16 (from Keras Applications)
+# 3. VGG19 (from Keras Applications)
+# 4. AlexNet (Custom Implementation)
+# 5. CSRNet (Custom Implementation for Crowd Counting)
+#
+# The script will output a final summary table comparing the performance
+# of all models based on MAE and MSE.
+# ==============================================================================
+
+# --- 1. Imports and Setup ---
+import os
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+# TensorFlow and Keras Imports
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, Conv2D, MaxPooling2D, Flatten, Dropout, Activation
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ReduceLROnPlateau, EarlyStopping
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import resnet50, vgg16, vgg19
+
+# Set plotting style and seed for reproducibility
+sns.set(style='whitegrid', context='notebook', palette='deep')
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# --- 2. Data Preparation ---
+# --- 2.1 Load and Sort Data ---
+# Load the labels and ensure they are sorted chronologically by 'id'
+# This is CRITICAL for creating meaningful time sequences.
+df = pd.read_csv("/root/.cache/kagglehub/datasets/fmena14/crowd-counting/versions/3/labels.csv")
+df['image_name'] = df['id'].map('seq_{:06d}.jpg'.format)
+df = df.sort_values('id').reset_index(drop=True)
+
+print("Data loaded and sorted:")
+print(df.head())
+
+# --- 2.2 Create Sequences of File Paths ---
+data_dir = '/root/.cache/kagglehub/datasets/fmena14/crowd-counting/versions/3/frames/frames'
+all_image_paths = [os.path.join(data_dir, fname) for fname in df['image_name']]
+all_counts = df['count'].values
+
+SEQUENCE_LENGTH = 5  # Use 4 frames to predict the count in the 5th frame
+X_sequence_paths, y_sequence_counts = [], []
+
+# This loop creates overlapping sequences of file paths
+for i in range(len(all_image_paths) - SEQUENCE_LENGTH):
+    X_sequence_paths.append(all_image_paths[i : i + SEQUENCE_LENGTH])
+    # The target is the count of the LAST frame in the sequence
+    y_sequence_counts.append(all_counts[i + SEQUENCE_LENGTH - 1])
+
+print(f"\nCreated {len(X_sequence_paths)} sequences of length {SEQUENCE_LENGTH}.")
+
+
+IMG_SIZE = 224
+BATCH_SIZE = 32
+
+# We use a standard ImageDataGenerator for single-image spatial analysis
+datagen = ImageDataGenerator(
+    rescale=1./255,
+    validation_split=0.2  # Use 20% of data for validation
+)
+
+flow_params = dict(
+    dataframe=df,
+    directory=data_dir,
+    x_col="image_name",
+    y_col="count",
+    target_size=(IMG_SIZE, IMG_SIZE),
+    color_mode='rgb',
+    class_mode="raw",
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    seed=42
+)
+
+train_generator = datagen.flow_from_dataframe(subset='training', **flow_params)
+valid_generator = datagen.flow_from_dataframe(subset='validation', **flow_params)
+
+
+# --- 3. Model Definitions ---
+
+# --- 3.1 Generic Function for Keras Application Models ---
+def build_keras_app_model(app_model, model_name):
+    """Builds a regression model using a pre-trained Keras application."""
+    base_model = app_model(
+        weights='imagenet',
+        include_top=False,
+        input_shape=(IMG_SIZE, IMG_SIZE, 3),
+        pooling='avg'
+    )
+    base_model.trainable = False  # Freeze base layers
+
+    x = base_model.output
+    x = Dense(512, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    predictions = Dense(1, activation='linear')(x)
+    
+    model = Model(inputs=base_model.input, outputs=predictions, name=model_name)
+    return model
+
+# --- 3.2 AlexNet (Custom Implementation) ---
+def build_alexnet_model():
+    """Builds the AlexNet architecture from scratch."""
+    model = tf.keras.models.Sequential([
+        # Layer 1
+        Conv2D(96, kernel_size=(11,11), strides=(4,4), activation='relu', input_shape=(IMG_SIZE, IMG_SIZE, 3)),
+        MaxPooling2D(pool_size=(3,3), strides=(2,2)),
+        # Layer 2
+        Conv2D(256, kernel_size=(5,5), padding='same', activation='relu'),
+        MaxPooling2D(pool_size=(3,3), strides=(2,2)),
+        # Layer 3-5
+        Conv2D(384, kernel_size=(3,3), padding='same', activation='relu'),
+        Conv2D(384, kernel_size=(3,3), padding='same', activation='relu'),
+        Conv2D(256, kernel_size=(3,3), padding='same', activation='relu'),
+        MaxPooling2D(pool_size=(3,3), strides=(2,2)),
+        # Flatten and Dense layers
+        Flatten(),
+        Dense(4096, activation='relu'),
+        Dropout(0.5),
+        Dense(4096, activation='relu'),
+        Dropout(0.5),
+        Dense(1, activation='linear')
+    ], name="AlexNet")
+    return model
+
+# --- 3.3 CSRNet (Custom Implementation) ---
+def build_csrnet_model():
+    """Builds the CSRNet architecture with a VGG16 front-end and dilated convolutions."""
+    # Front-end: VGG16
+    vgg16_base = vgg16.VGG16(weights='imagenet', include_top=False, input_shape=(IMG_SIZE, IMG_SIZE, 3))
+    # Use layers up to 'block5_conv3'
+    frontend = Model(inputs=vgg16_base.input, outputs=vgg16_base.get_layer('block5_conv3').output)
+    frontend.trainable = False # Freeze frontend
+
+    # Back-end: Dilated Convolutions
+    backend = frontend.output
+    backend = Conv2D(512, (3, 3), padding='same', dilation_rate=2, activation='relu')(backend)
+    backend = Conv2D(512, (3, 3), padding='same', dilation_rate=2, activation='relu')(backend)
+    backend = Conv2D(512, (3, 3), padding='same', dilation_rate=2, activation='relu')(backend)
+    backend = Conv2D(256, (3, 3), padding='same', dilation_rate=2, activation='relu')(backend)
+    backend = Conv2D(128, (3, 3), padding='same', dilation_rate=2, activation='relu')(backend)
+    backend = Conv2D(64, (3, 3), padding='same', dilation_rate=2, activation='relu')(backend)
+    
+    # This is a key part of CSRNet: it outputs a density map, not a single count.
+    # We sum the density map to get the final count.
+    density_map = Conv2D(1, (1, 1), activation='relu', name='density_map')(backend)
+    
+    # We need to sum the density map to get the count. This is done outside the model for training.
+    # For simplicity in this comparison script, we will add a GlobalAveragePooling layer
+    # to regress a single count directly, which is a common adaptation.
+    count_output = tf.keras.layers.GlobalAveragePooling2D()(density_map)
+    
+    model = Model(inputs=frontend.input, outputs=count_output, name="CSRNet_Adapted")
+    return model
+
+
+# --- 4. Training and Evaluation Loop ---
+
+# --- 4.1 Define Models to Compare ---
+models_to_compare = {
+    "ResNet50": build_keras_app_model(resnet50.ResNet50, "ResNet50"),
+    "VGG16": build_keras_app_model(vgg16.VGG16, "VGG16"),
+    "VGG19": build_keras_app_model(vgg19.VGG19, "VGG19"),
+    "AlexNet": build_alexnet_model(),
+    "CSRNet": build_csrnet_model()
+}
+
+results = []
+histories = {}
+EPOCHS = 30 # Use a shorter epoch count for this comparison script
+
+for model_name, model in models_to_compare.items():
+    print("\n" + "="*50)
+    print(f"--- Training Model: {model_name} ---")
+    print("="*50)
+    
+    # Compile the model
+    model.compile(
+        optimizer=Adam(learning_rate=0.0001),
+        loss='mean_squared_error',
+        metrics=['mean_absolute_error']
+    )
+    
+    # Callbacks
+    early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    
+    # Train the model
+    history = model.fit(
+        train_generator,
+        epochs=EPOCHS,
+        validation_data=valid_generator,
+        callbacks=[early_stopping],
+        verbose=1
+    )
+    histories[model_name] = history
+    
+    # Evaluate the model
+    print(f"\n--- Evaluating {model_name} ---")
+    valid_generator.reset() # Reset generator for evaluation
+    predictions = model.predict(valid_generator)
+    true_counts = valid_generator.classes
+    
+    mae = mean_absolute_error(true_counts, predictions)
+    mse = mean_squared_error(true_counts, predictions)
+    
+    results.append({
+        "Model": model_name,
+        "MAE": mae,
+        "MSE": mse,
+        "Parameters": model.count_params()
+    })
+    
+    print(f"Evaluation for {model_name}: MAE={mae:.4f}, MSE={mse:.4f}")
+
+
+# --- 5. Final Results Summary ---
+print("\n" + "="*60)
+print("--- Final Model Comparison Summary ---")
+print("="*60)
+
+results_df = pd.DataFrame(results)
+print(results_df.to_string(index=False))
+
+# --- 5.1 Plot Loss Curves for Comparison ---
+plt.figure(figsize=(15, 8))
+for model_name, history in histories.items():
+    plt.plot(history.history['val_loss'], label=f'{model_name} Validation Loss')
+
+plt.title('Model Validation Loss Comparison', fontsize=16)
+plt.xlabel('Epochs', fontsize=12)
+plt.ylabel('Loss (MSE)', fontsize=12)
+plt.legend()
+plt.grid(True)
+plt.show()
+
