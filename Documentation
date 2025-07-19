@@ -1,0 +1,66 @@
+TS-CrowdNet: Enhancing Real-Time Crowd Density Estimation via Temporal-Spatial Transfer Learning
+This repository contains two distinct projects related to crowd counting using deep learning. The first project compares the performance of five different CNN architectures on the Mall dataset. The second project implements TS-CrowdNet, a temporal-spatial framework that uses video sequences to improve crowd counting accuracy.
+
+Existing  Model Comparison
+This project benchmarks five well-known deep learning models for the task of crowd counting. Each model is trained and evaluated on the Mall dataset to determine its effectiveness in estimating the number of people in an image.
+
+Models Compared
+ResNet50 (from Keras Applications)
+
+VGG16 (from Keras Applications)
+
+VGG19 (from Keras Applications)
+
+AlexNet (Custom Implementation)
+
+CSRNet (Custom Implementation for Crowd Counting)
+
+Dataset
+The project uses the Mall Dataset, which contains a collection of images from a shopping mall with corresponding crowd counts. The script automatically downloads this dataset from Kaggle Datasets.
+
+How to Run
+Setup Environment: Ensure you have Python, Jupyter Notebook, TensorFlow, and other required libraries installed.
+
+pip install tensorflow pandas numpy matplotlib seaborn scikit-learn kagglehub
+
+Open and Run Notebook: Launch the RESNET50,CSRNET,ALEXNET,VGG16 and VGG19.ipynb notebook in a Jupyter environment.
+
+Execution: Run the cells in the notebook sequentially. The script will handle data downloading, model training, evaluation, and will generate a comparison plot of the validation losses.
+
+Results Summary
+
+
+Conclusion: CSRNet, a model specifically designed for crowd counting, significantly outperforms the other general-purpose architectures.
+
+Project 2: TS-CrowdNet: A Temporal-Spatial Framework
+This project implements TS-CrowdNet, which enhances traditional crowd counting by incorporating temporal information from video sequences. Instead of analyzing single images, this model processes a sequence of frames to make a more context-aware prediction.
+
+Architecture
+TS-CrowdNet uses a two-part architecture:
+
+Spatial Backbone: A pre-trained ResNet50 model is applied to each frame in a sequence to extract spatial features. This is achieved using a TimeDistributed layer in Keras.
+
+Temporal Module: An LSTM (Long Short-Term Memory) layer processes the sequence of features extracted by the backbone. This allows the model to learn patterns and movements across time.
+
+Data Preparation
+The script uses a custom data generator that creates overlapping sequences of frames from the Mall dataset. For each sequence of 5 frames, the model is trained to predict the crowd count in the final frame.
+
+How to Run
+Setup Environment: Ensure you have the necessary libraries installed.
+
+pip install tensorflow pandas numpy matplotlib seaborn scikit-learn scipy kagglehub
+
+Execute Script: Run the TS-CrowdNet_ Full Updated Source Code Python script.
+
+Process: The script will download the data, prepare the sequences, build and compile the TS-CrowdNet model, and then proceed with training and evaluation.
+
+Performance Metrics
+The model's performance is evaluated using MAE, MSE, and a contextual accuracy metric.
+
+Mean Absolute Error (MAE): On average, the model's prediction is off by ~2 people.
+
+Mean Squared Error (MSE): 9.38
+
+Accuracy : 96.06% .
+
+Conclusion: By leveraging temporal data, TS-CrowdNet achieves a very low MAE and high accuracy, demonstrating the benefit of considering the spatial-temporal context in crowd counting tasks.
