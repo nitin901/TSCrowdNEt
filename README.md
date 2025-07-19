@@ -45,7 +45,7 @@ TS-CrowdNet/
 Installation
 Clone this repository:
 
-git clone https://github.com/your-username/TS-CrowdNet.git
+git clone [https://github.com/your-username/TS-CrowdNet.git](https://github.com/nitin901/TSCrowdNEt/tree/main)
 cd TS-CrowdNet
 
 Install the required Python packages. It is recommended to use a virtual environment.
